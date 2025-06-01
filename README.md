@@ -322,4 +322,4 @@ For questions about this testing framework:
 
 **Happy Testing!** 🚀
 
-This comprehensive testing environment should provide valuable insights into Qodo Merge's capabilities.
+This comprehensive testing environment should provide valuable insights into Qodo Merge's capabilities. Feel free to make major changes or delete this repo if need be.s
