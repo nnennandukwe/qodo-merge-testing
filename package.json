@@ -1,0 +1,39 @@
+{
+  "name": "qodo-merge-testing",
+  "version": "1.0.0",
+  "description": "Comprehensive testing environment for Qodo Merge (PR Agent)",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd src && python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000",
+    "frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "test": "cd tests && python -m pytest",
+    "lint": "cd frontend && npm run lint",
+    "type-check": "cd frontend && npm run type-check",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "setup": "pip install -r requirements.txt && npm install && cd frontend && npm install"
+  },
+  "keywords": [
+    "qodo",
+    "merge",
+    "pr-agent",
+    "code-review",
+    "testing",
+    "devrel"
+  ],
+  "author": "DevRel Testing Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/qodo-merge-testing.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/qodo-merge-testing/issues"
+  },
+  "homepage": "https://github.com/your-org/qodo-merge-testing#readme"
+}

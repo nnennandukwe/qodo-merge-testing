@@ -1,0 +1,41 @@
+name: Qodo Merge PR Agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  qodo-merge-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    name: Qodo Merge Code Review
+    
+    steps:
+    - name: Qodo Merge Action
+      id: qodo-merge
+      uses: Codium-ai/pr-agent@main
+      env:
+        OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        github_action_config.auto_review: true
+        github_action_config.auto_describe: true
+        github_action_config.auto_improve: true
+        
+  qodo-merge-chat:
+    if: github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/qodo')
+    runs-on: ubuntu-latest
+    name: Qodo Merge Chat
+    
+    steps:
+    - name: Qodo Merge Chat
+      uses: Codium-ai/pr-agent@main
+      env:
+        OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
