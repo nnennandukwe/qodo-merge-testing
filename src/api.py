@@ -137,23 +137,20 @@ async def delete_user(user_id: int):
     
     return {"message": "User deleted successfully"}
 
-# INTENTIONAL ISSUE: N+1 query problem
+# OPTIMIZED: Fixed N+1 query problem with single query
 @app.get("/users/")
 async def get_all_users():
     conn = get_db_connection()
-    cursor = conn.execute("SELECT id FROM users")
-    user_ids = cursor.fetchall()
+    # Single query to get all users at once
+    cursor = conn.execute("SELECT id, username, email FROM users")
+    users = cursor.fetchall()
     
-    users = []
-    for user_id in user_ids:
-        # Making separate query for each user - N+1 problem!
-        user_cursor = conn.execute(f"SELECT * FROM users WHERE id = {user_id[0]}")
-        user = user_cursor.fetchone()
-        if user:
-            users.append({"id": user[0], "username": user[1], "email": user[2]})
+    result = []
+    for user in users:
+        result.append({"id": user[0], "username": user[1], "email": user[2]})
     
     conn.close()
-    return users
+    return result
 
 # INTENTIONAL ISSUE: Unsafe file operations
 @app.post("/upload/")

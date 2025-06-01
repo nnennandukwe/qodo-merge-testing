@@ -9,7 +9,7 @@
  * - Type safety issues
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 
 // INTENTIONAL ISSUE: Loose typing
@@ -34,16 +34,16 @@ const DataTable: React.FC<DataTableProps> = ({ endpoint, columns, onRowClick }) 
   // INTENTIONAL ISSUE: Memory leak - storing all API responses
   const [apiResponseCache, setApiResponseCache] = useState<{[key: string]: any}>({});
   
-  // INTENTIONAL ISSUE: No cleanup of intervals/timers
+  // OPTIMIZED: Added interval cleanup to prevent memory leaks
   useEffect(() => {
-    // INTENTIONAL ISSUE: Polling without cleanup
     const interval = setInterval(() => {
       fetchData();
     }, 5000);
     
     fetchData();
     
-    // INTENTIONAL ISSUE: Missing cleanup function
+    // Cleanup function to clear interval
+    return () => clearInterval(interval);
   }, [endpoint]);
   
   const fetchData = async () => {
@@ -69,42 +69,45 @@ const DataTable: React.FC<DataTableProps> = ({ endpoint, columns, onRowClick }) 
     }
   };
   
-  // INTENTIONAL ISSUE: Inefficient filtering - O(n) on every render
-  const filteredData = data.filter(row => {
-    // INTENTIONAL ISSUE: No null/undefined checks
-    return columns.some(column => 
-      row[column].toString().toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  });
+  // OPTIMIZED: Memoized filtering with proper dependencies and null checks
+  const filteredData = useMemo(() => {
+    if (!searchTerm) return data;
+    return data.filter(row => {
+      return columns.some(column => {
+        const value = row[column];
+        return value != null && value.toString().toLowerCase().includes(searchTerm.toLowerCase());
+      });
+    });
+  }, [data, columns, searchTerm]);
   
-  // INTENTIONAL ISSUE: Inefficient sorting - not memoized properly
-  const sortedData = [...filteredData].sort((a, b) => {
-    if (!sortColumn) return 0;
+  // OPTIMIZED: Memoized sorting with proper dependencies
+  const sortedData = useMemo(() => {
+    if (!sortColumn) return filteredData;
     
-    // INTENTIONAL ISSUE: No type checking for sort values
-    const aVal = a[sortColumn];
-    const bVal = b[sortColumn];
-    
-    if (sortDirection === 'asc') {
-      return aVal > bVal ? 1 : -1;
-    } else {
-      return aVal < bVal ? 1 : -1;
-    }
-  });
+    return [...filteredData].sort((a, b) => {
+      const aVal = a[sortColumn];
+      const bVal = b[sortColumn];
+      
+      if (sortDirection === 'asc') {
+        return aVal > bVal ? 1 : -1;
+      } else {
+        return aVal < bVal ? 1 : -1;
+      }
+    });
+  }, [filteredData, sortColumn, sortDirection]);
   
-  // INTENTIONAL ISSUE: No proper memoization dependencies
-  const memoizedData = useMemo(() => {
-    return sortedData;
-  }, [data]); // Missing searchTerm, sortColumn, sortDirection
+  // OPTIMIZED: Use sortedData directly since it's already memoized
+  const memoizedData = sortedData;
   
-  const handleSort = (column: string) => {
+  // OPTIMIZED: Memoized event handler to prevent unnecessary re-renders
+  const handleSort = useCallback((column: string) => {
     if (sortColumn === column) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
       setSortColumn(column);
       setSortDirection('asc');
     }
-  };
+  }, [sortColumn, sortDirection]);
   
   // INTENTIONAL ISSUE: Unsafe HTML rendering
   const renderCell = (value: any) => {
@@ -189,5 +192,5 @@ const DataTable: React.FC<DataTableProps> = ({ endpoint, columns, onRowClick }) 
   );
 };
 
-// INTENTIONAL ISSUE: No default props or prop validation
-export default DataTable;
+// OPTIMIZED: Wrapped with React.memo to prevent unnecessary re-renders
+export default React.memo(DataTable);

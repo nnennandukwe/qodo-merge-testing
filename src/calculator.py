@@ -21,11 +21,21 @@ class Calculator:
         self.history.append(f"{a} / {b} = {result}")
         return result
     
-    # INTENTIONAL ISSUE: Inefficient recursive fibonacci - O(2^n) complexity
+    # OPTIMIZED: Efficient memoized fibonacci - O(n) complexity
     def fibonacci(self, n):
+        if not hasattr(self, '_fib_cache'):
+            self._fib_cache = {}
+        
+        if n in self._fib_cache:
+            return self._fib_cache[n]
+        
         if n <= 1:
-            return n
-        return self.fibonacci(n-1) + self.fibonacci(n-2)
+            result = n
+        else:
+            result = self.fibonacci(n-1) + self.fibonacci(n-2)
+        
+        self._fib_cache[n] = result
+        return result
     
     # INTENTIONAL ISSUE: Using eval() - major security vulnerability
     def calculate_expression(self, expression):
