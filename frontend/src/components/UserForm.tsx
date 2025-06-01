@@ -10,7 +10,7 @@
  * - No error boundaries
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 
 // INTENTIONAL ISSUE: No proper TypeScript interfaces
@@ -36,24 +36,24 @@ const UserForm: React.FC<{ onSubmit: (data: any) => void }> = ({ onSubmit }) => 
   const [loading, setLoading] = useState(false);
   const [apiKey, setApiKey] = useState(''); // Storing API key in component state!
   
-  // INTENTIONAL ISSUE: No cleanup, potential memory leak
+  // OPTIMIZED: Added dependency array and error handling
   useEffect(() => {
-    // INTENTIONAL ISSUE: No error handling for failed requests
     axios.get('/api/users').then(response => {
       setUsers(response.data);
+    }).catch(error => {
+      console.error('Failed to fetch users:', error);
     });
-    
-    // INTENTIONAL ISSUE: Missing dependency array causes infinite re-renders
-  });
+  }, []); // Empty dependency array - only run once
   
-  // INTENTIONAL ISSUE: No input validation
-  const handleInputChange = (e: any) => {
+  // OPTIMIZED: Proper immutable state updates with useCallback
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     
-    // INTENTIONAL ISSUE: Direct state mutation
-    formData[name] = value;
-    setFormData(formData);
-  };
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  }, []);
   
   // INTENTIONAL ISSUE: No form validation before submission
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,16 +80,14 @@ const UserForm: React.FC<{ onSubmit: (data: any) => void }> = ({ onSubmit }) => 
     }
   };
   
-  // INTENTIONAL ISSUE: Unsafe innerHTML usage
-  const renderUserList = () => {
+  // OPTIMIZED: Memoized user list rendering without XSS vulnerability
+  const userList = useMemo(() => {
     return users.map((user: any) => (
-      <div 
-        key={user.id} 
-        // INTENTIONAL ISSUE: XSS vulnerability
-        dangerouslySetInnerHTML={{ __html: user.username }}
-      />
+      <div key={user.id}>
+        {user.username} {/* Safe rendering without dangerouslySetInnerHTML */}
+      </div>
     ));
-  };
+  }, [users]);
   
   // INTENTIONAL ISSUE: No error boundary, will crash on errors
   return (
@@ -160,10 +158,10 @@ const UserForm: React.FC<{ onSubmit: (data: any) => void }> = ({ onSubmit }) => 
         </button>
       </form>
       
-      {/* INTENTIONAL ISSUE: Rendering user data without proper escaping */}
+      {/* OPTIMIZED: Safe rendering of user data */}
       <div className="user-list">
         <h3>Existing Users:</h3>
-        {renderUserList()}
+        {userList}
       </div>
       
       {/* INTENTIONAL ISSUE: Debug information exposed in production */}
@@ -176,5 +174,5 @@ const UserForm: React.FC<{ onSubmit: (data: any) => void }> = ({ onSubmit }) => 
   );
 };
 
-// INTENTIONAL ISSUE: Component not properly memoized, will re-render unnecessarily
-export default UserForm;
+// OPTIMIZED: Wrapped with React.memo to prevent unnecessary re-renders
+export default React.memo(UserForm);
