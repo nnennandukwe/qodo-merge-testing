@@ -10,171 +10,350 @@
  * - No error boundaries
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
+import ErrorBoundary from './ErrorBoundary';
 
-// INTENTIONAL ISSUE: No proper TypeScript interfaces
 interface User {
   id?: number;
   username: string;
   email: string;
-  password?: string;
 }
 
-// INTENTIONAL ISSUE: Any type usage
-const UserForm: React.FC<{ onSubmit: (data: any) => void }> = ({ onSubmit }) => {
-  // INTENTIONAL ISSUE: No initial state typing
-  const [formData, setFormData] = useState({
+interface FormData {
+  username: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+}
+
+interface UserFormProps {
+  onSubmit: (data: User) => void;
+}
+
+interface FormErrors {
+  username?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
+  general?: string;
+}
+
+const UserForm: React.FC<UserFormProps> = ({ onSubmit }) => {
+  const [formData, setFormData] = useState<FormData>({
     username: '',
     email: '',
     password: '',
     confirmPassword: ''
   });
   
-  // INTENTIONAL ISSUE: Storing sensitive data in state without protection
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
-  const [apiKey, setApiKey] = useState(''); // Storing API key in component state!
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [submitted, setSubmitted] = useState(false);
   
-  // INTENTIONAL ISSUE: No cleanup, potential memory leak
   useEffect(() => {
-    // INTENTIONAL ISSUE: No error handling for failed requests
-    axios.get('/api/users').then(response => {
-      setUsers(response.data);
+    let isMounted = true;
+    
+    const fetchUsers = async () => {
+      try {
+        const response = await axios.get('/api/users', { timeout: 5000 });
+        if (isMounted && Array.isArray(response.data)) {
+          setUsers(response.data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch users:', error);
+        // Don't set error state for background operations
+      }
+    };
+    
+    fetchUsers();
+    
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+  
+  const validateField = useCallback((name: keyof FormData, value: string): string | undefined => {
+    switch (name) {
+      case 'username':
+        if (!value.trim()) return 'Username is required';
+        if (value.length < 3) return 'Username must be at least 3 characters';
+        if (!/^[a-zA-Z0-9_]+$/.test(value)) return 'Username can only contain letters, numbers, and underscores';
+        break;
+      case 'email':
+        if (!value.trim()) return 'Email is required';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'Please enter a valid email address';
+        break;
+      case 'password':
+        if (!value) return 'Password is required';
+        if (value.length < 6) return 'Password must be at least 6 characters';
+        if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(value)) {
+          return 'Password must contain at least one uppercase letter, one lowercase letter, and one number';
+        }
+        break;
+      case 'confirmPassword':
+        if (!value) return 'Please confirm your password';
+        if (value !== formData.password) return 'Passwords do not match';
+        break;
+    }
+    return undefined;
+  }, [formData.password]);
+  
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    const fieldName = name as keyof FormData;
+    
+    setFormData(prev => ({
+      ...prev,
+      [fieldName]: value
+    }));
+    
+    // Clear error for this field when user starts typing
+    if (errors[fieldName]) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[fieldName];
+        return newErrors;
+      });
+    }
+    
+    // Validate confirm password when password changes
+    if (fieldName === 'password' && formData.confirmPassword) {
+      const confirmPasswordError = validateField('confirmPassword', formData.confirmPassword);
+      setErrors(prev => ({
+        ...prev,
+        confirmPassword: confirmPasswordError
+      }));
+    }
+  }, [errors, formData.confirmPassword, validateField]);
+  
+  const validateForm = useCallback((): boolean => {
+    const newErrors: FormErrors = {};
+    
+    Object.keys(formData).forEach((key) => {
+      const fieldName = key as keyof FormData;
+      const error = validateField(fieldName, formData[fieldName]);
+      if (error) {
+        newErrors[fieldName] = error;
+      }
     });
     
-    // INTENTIONAL ISSUE: Missing dependency array causes infinite re-renders
-  });
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }, [formData, validateField]);
   
-  // INTENTIONAL ISSUE: No input validation
-  const handleInputChange = (e: any) => {
-    const { name, value } = e.target;
-    
-    // INTENTIONAL ISSUE: Direct state mutation
-    formData[name] = value;
-    setFormData(formData);
-  };
-  
-  // INTENTIONAL ISSUE: No form validation before submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitted(true);
+    
+    if (!validateForm()) {
+      return;
+    }
+    
     setLoading(true);
+    setErrors({});
     
     try {
-      // INTENTIONAL ISSUE: No client-side validation
-      // INTENTIONAL ISSUE: Sending password in plain text
-      const response = await axios.post('/api/users', {
-        ...formData,
-        apiKey: apiKey // Including API key in request body
+      const userData = {
+        username: formData.username.trim(),
+        email: formData.email.trim().toLowerCase(),
+        password: formData.password
+      };
+      
+      const response = await axios.post('/api/users', userData, {
+        timeout: 10000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
       });
       
-      // INTENTIONAL ISSUE: No success feedback to user
+      // Clear form on success
+      setFormData({
+        username: '',
+        email: '',
+        password: '',
+        confirmPassword: ''
+      });
+      setSubmitted(false);
+      
       onSubmit(response.data);
       
-      // INTENTIONAL ISSUE: Not clearing sensitive data after submission
     } catch (error: any) {
-      // INTENTIONAL ISSUE: Exposing full error details to user
-      alert(`Error: ${error.response?.data?.detail || error.message}`);
+      console.error('Form submission error:', error);
+      
+      if (error.response?.status === 400) {
+        setErrors({ general: error.response.data.detail || 'Invalid form data. Please check your inputs.' });
+      } else if (error.response?.status === 409) {
+        setErrors({ general: 'Username or email already exists.' });
+      } else if (error.code === 'ECONNABORTED') {
+        setErrors({ general: 'Request timed out. Please try again.' });
+      } else {
+        setErrors({ general: 'An unexpected error occurred. Please try again later.' });
+      }
     } finally {
       setLoading(false);
     }
   };
   
-  // INTENTIONAL ISSUE: Unsafe innerHTML usage
-  const renderUserList = () => {
-    return users.map((user: any) => (
-      <div 
-        key={user.id} 
-        // INTENTIONAL ISSUE: XSS vulnerability
-        dangerouslySetInnerHTML={{ __html: user.username }}
-      />
+  const renderUserList = useMemo(() => {
+    return users.map((user: User) => (
+      <div key={user.id} style={{ padding: '4px 0' }}>
+        <strong>{user.username}</strong> - {user.email}
+      </div>
     ));
-  };
+  }, [users]);
   
-  // INTENTIONAL ISSUE: No error boundary, will crash on errors
   return (
-    <div className="user-form">
-      <h2>User Registration</h2>
-      
-      {/* INTENTIONAL ISSUE: Missing accessibility attributes */}
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label>Username:</label>
-          <input
-            type="text"
-            name="username"
-            value={formData.username}
-            onChange={handleInputChange}
-            // INTENTIONAL ISSUE: No required attribute, no validation
-          />
-        </div>
+    <ErrorBoundary>
+      <div className="user-form">
+        <h2>User Registration</h2>
         
-        <div>
-          <label>Email:</label>
-          <input
-            type="text" // INTENTIONAL ISSUE: Should be type="email"
-            name="email"
-            value={formData.email}
-            onChange={handleInputChange}
-            // INTENTIONAL ISSUE: No email validation
-          />
-        </div>
+        {errors.general && (
+          <div style={{ color: '#d63031', marginBottom: '16px', padding: '8px', backgroundColor: '#ffe0e0', borderRadius: '4px' }}>
+            {errors.general}
+          </div>
+        )}
         
-        <div>
-          <label>Password:</label>
-          <input
-            type="password"
-            name="password"
-            value={formData.password}
-            onChange={handleInputChange}
-            // INTENTIONAL ISSUE: No password strength requirements
-            autoComplete="new-password" // INTENTIONAL ISSUE: Potential security issue
-          />
-        </div>
+        <form onSubmit={handleSubmit} noValidate>
+          <div style={{ marginBottom: '16px' }}>
+            <label htmlFor="username" style={{ display: 'block', marginBottom: '4px' }}>Username:</label>
+            <input
+              id="username"
+              type="text"
+              name="username"
+              value={formData.username}
+              onChange={handleInputChange}
+              required
+              aria-invalid={errors.username ? 'true' : 'false'}
+              aria-describedby={errors.username ? 'username-error' : undefined}
+              style={{
+                borderColor: errors.username ? '#d63031' : '#ddd',
+                padding: '8px',
+                width: '100%',
+                maxWidth: '300px'
+              }}
+            />
+            {errors.username && (
+              <div id="username-error" style={{ color: '#d63031', fontSize: '14px', marginTop: '4px' }}>
+                {errors.username}
+              </div>
+            )}
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label htmlFor="email" style={{ display: 'block', marginBottom: '4px' }}>Email:</label>
+            <input
+              id="email"
+              type="email"
+              name="email"
+              value={formData.email}
+              onChange={handleInputChange}
+              required
+              aria-invalid={errors.email ? 'true' : 'false'}
+              aria-describedby={errors.email ? 'email-error' : undefined}
+              style={{
+                borderColor: errors.email ? '#d63031' : '#ddd',
+                padding: '8px',
+                width: '100%',
+                maxWidth: '300px'
+              }}
+            />
+            {errors.email && (
+              <div id="email-error" style={{ color: '#d63031', fontSize: '14px', marginTop: '4px' }}>
+                {errors.email}
+              </div>
+            )}
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label htmlFor="password" style={{ display: 'block', marginBottom: '4px' }}>Password:</label>
+            <input
+              id="password"
+              type="password"
+              name="password"
+              value={formData.password}
+              onChange={handleInputChange}
+              required
+              autoComplete="new-password"
+              aria-invalid={errors.password ? 'true' : 'false'}
+              aria-describedby={errors.password ? 'password-error' : undefined}
+              style={{
+                borderColor: errors.password ? '#d63031' : '#ddd',
+                padding: '8px',
+                width: '100%',
+                maxWidth: '300px'
+              }}
+            />
+            {errors.password && (
+              <div id="password-error" style={{ color: '#d63031', fontSize: '14px', marginTop: '4px' }}>
+                {errors.password}
+              </div>
+            )}
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label htmlFor="confirmPassword" style={{ display: 'block', marginBottom: '4px' }}>Confirm Password:</label>
+            <input
+              id="confirmPassword"
+              type="password"
+              name="confirmPassword"
+              value={formData.confirmPassword}
+              onChange={handleInputChange}
+              required
+              autoComplete="new-password"
+              aria-invalid={errors.confirmPassword ? 'true' : 'false'}
+              aria-describedby={errors.confirmPassword ? 'confirm-password-error' : undefined}
+              style={{
+                borderColor: errors.confirmPassword ? '#d63031' : '#ddd',
+                padding: '8px',
+                width: '100%',
+                maxWidth: '300px'
+              }}
+            />
+            {errors.confirmPassword && (
+              <div id="confirm-password-error" style={{ color: '#d63031', fontSize: '14px', marginTop: '4px' }}>
+                {errors.confirmPassword}
+              </div>
+            )}
+          </div>
+          
+          <button 
+            type="submit" 
+            disabled={loading}
+            style={{
+              padding: '12px 24px',
+              backgroundColor: loading ? '#ccc' : '#74b9ff',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: loading ? 'not-allowed' : 'pointer'
+            }}
+          >
+            {loading ? 'Submitting...' : 'Submit'}
+          </button>
+        </form>
         
-        <div>
-          <label>Confirm Password:</label>
-          <input
-            type="password"
-            name="confirmPassword"
-            value={formData.confirmPassword}
-            onChange={handleInputChange}
-            // INTENTIONAL ISSUE: No password confirmation validation
-          />
-        </div>
+        {users.length > 0 && (
+          <div className="user-list" style={{ marginTop: '32px' }}>
+            <h3>Existing Users:</h3>
+            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              {renderUserList}
+            </div>
+          </div>
+        )}
         
-        <div>
-          {/* INTENTIONAL ISSUE: Exposing API key in form */}
-          <label>API Key:</label>
-          <input
-            type="text"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Enter your API key"
-          />
-        </div>
-        
-        {/* INTENTIONAL ISSUE: No loading state indication */}
-        <button type="submit" disabled={loading}>
-          {loading ? 'Submitting...' : 'Submit'}
-        </button>
-      </form>
-      
-      {/* INTENTIONAL ISSUE: Rendering user data without proper escaping */}
-      <div className="user-list">
-        <h3>Existing Users:</h3>
-        {renderUserList()}
+        {process.env.NODE_ENV === 'development' && (
+          <div style={{ marginTop: '20px', border: '1px solid #ccc', padding: '10px' }}>
+            <h4>Debug Info:</h4>
+            <p>Form submitted: {submitted ? 'Yes' : 'No'}</p>
+            <p>Loading: {loading ? 'Yes' : 'No'}</p>
+            <p>Errors: {Object.keys(errors).length}</p>
+          </div>
+        )}
       </div>
-      
-      {/* INTENTIONAL ISSUE: Debug information exposed in production */}
-      <div style={{ display: 'block' }}>
-        <h4>Debug Info:</h4>
-        <pre>{JSON.stringify(formData, null, 2)}</pre>
-        <p>API Key: {apiKey}</p>
-      </div>
-    </div>
+    </ErrorBoundary>
   );
 };
 
-// INTENTIONAL ISSUE: Component not properly memoized, will re-render unnecessarily
-export default UserForm;
+export default React.memo(UserForm);

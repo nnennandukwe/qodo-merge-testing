@@ -30,72 +30,159 @@ class DatabaseManager:
         # INTENTIONAL ISSUE: No connection pooling
         self.connections = []
     
-    # INTENTIONAL ISSUE: Connection leak - no proper cleanup
     def get_connection(self):
         try:
             conn = psycopg2.connect(**DB_CONFIG)
-            self.connections.append(conn)  # Track connections but never clean up
+            self.connections.append(conn)
             return conn
-        except:
-            # INTENTIONAL ISSUE: Fall back to SQLite without proper error handling
-            return sqlite3.connect('fallback.db')
+        except psycopg2.Error as e:
+            # Log the PostgreSQL error and fall back to SQLite
+            import logging
+            logging.warning(f"PostgreSQL connection failed: {str(e)}, falling back to SQLite")
+            try:
+                return sqlite3.connect('fallback.db')
+            except sqlite3.Error as sqlite_e:
+                logging.error(f"SQLite connection also failed: {str(sqlite_e)}")
+                raise Exception("Unable to establish database connection")
+        except Exception as e:
+            import logging
+            logging.error(f"Unexpected error in database connection: {str(e)}")
+            raise Exception("Database connection error")
     
-    # INTENTIONAL ISSUE: N+1 query problem
     def get_users_with_posts(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Get all users
-        cursor.execute("SELECT id, username FROM users")
-        users = cursor.fetchall()
-        
-        result = []
-        for user in users:
-            # Separate query for each user's posts - N+1 problem!
-            cursor.execute(f"SELECT title FROM posts WHERE user_id = {user[0]}")
-            posts = cursor.fetchall()
-            result.append({
-                "id": user[0],
-                "username": user[1],
-                "posts": [post[0] for post in posts]
-            })
-        
-        # INTENTIONAL ISSUE: Connection never closed
-        return result
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Use JOIN to solve N+1 problem
+            query = """
+                SELECT u.id, u.username, p.title
+                FROM users u
+                LEFT JOIN posts p ON u.id = p.user_id
+                ORDER BY u.id
+            """
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            
+            # Group results by user
+            result = {}
+            for row in rows:
+                user_id, username, post_title = row
+                if user_id not in result:
+                    result[user_id] = {
+                        "id": user_id,
+                        "username": username,
+                        "posts": []
+                    }
+                if post_title:
+                    result[user_id]["posts"].append(post_title)
+            
+            return list(result.values())
+        except (psycopg2.Error, sqlite3.Error) as e:
+            import logging
+            logging.error(f"Database error in get_users_with_posts: {str(e)}")
+            raise Exception("Failed to retrieve users with posts")
+        except Exception as e:
+            import logging
+            logging.error(f"Unexpected error in get_users_with_posts: {str(e)}")
+            raise Exception("Failed to retrieve users with posts")
+        finally:
+            if conn:
+                conn.close()
     
-    # INTENTIONAL ISSUE: No transaction management
     def transfer_funds(self, from_account: int, to_account: int, amount: float):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # INTENTIONAL ISSUE: No transaction - if second update fails, data is inconsistent
-        cursor.execute(f"UPDATE accounts SET balance = balance - {amount} WHERE id = {from_account}")
-        
-        # Simulate potential failure point
-        time.sleep(0.1)
-        
-        cursor.execute(f"UPDATE accounts SET balance = balance + {amount} WHERE id = {to_account}")
-        
-        conn.commit()
-        # INTENTIONAL ISSUE: Connection not closed
+        conn = None
+        try:
+            # Input validation
+            if amount <= 0:
+                raise ValueError("Transfer amount must be positive")
+            if from_account == to_account:
+                raise ValueError("Cannot transfer to the same account")
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Start transaction
+            conn.autocommit = False
+            
+            # Check if from_account has sufficient balance
+            cursor.execute("SELECT balance FROM accounts WHERE id = %s", (from_account,))
+            result = cursor.fetchone()
+            if not result or result[0] < amount:
+                raise ValueError("Insufficient funds")
+            
+            # Perform transfer with proper transaction handling
+            cursor.execute(
+                "UPDATE accounts SET balance = balance - %s WHERE id = %s",
+                (amount, from_account)
+            )
+            
+            cursor.execute(
+                "UPDATE accounts SET balance = balance + %s WHERE id = %s",
+                (amount, to_account)
+            )
+            
+            # Commit transaction
+            conn.commit()
+            return True
+        except ValueError as e:
+            if conn:
+                conn.rollback()
+            raise e
+        except (psycopg2.Error, sqlite3.Error) as e:
+            if conn:
+                conn.rollback()
+            import logging
+            logging.error(f"Database error in transfer_funds: {str(e)}")
+            raise Exception("Transfer failed due to database error")
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            import logging
+            logging.error(f"Unexpected error in transfer_funds: {str(e)}")
+            raise Exception("Transfer failed")
+        finally:
+            if conn:
+                conn.close()
     
-    # INTENTIONAL ISSUE: SQL injection vulnerability
     def search_products(self, search_term: str, category: str):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # Direct string interpolation - SQL injection risk!
-        query = f"""
-            SELECT * FROM products 
-            WHERE name LIKE '%{search_term}%' 
-            AND category = '{category}'
-            ORDER BY price
-        """
-        
-        cursor.execute(query)
-        results = cursor.fetchall()
-        # INTENTIONAL ISSUE: Connection leak
-        return results
+        conn = None
+        try:
+            # Input validation
+            if not search_term or len(search_term.strip()) < 2:
+                raise ValueError("Search term must be at least 2 characters")
+            if not category or len(category.strip()) == 0:
+                raise ValueError("Category cannot be empty")
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Use parameterized query to prevent SQL injection
+            query = """
+                SELECT * FROM products 
+                WHERE name LIKE %s 
+                AND category = %s
+                ORDER BY price
+            """
+            
+            search_pattern = f"%{search_term}%"
+            cursor.execute(query, (search_pattern, category))
+            results = cursor.fetchall()
+            return results
+        except ValueError as e:
+            raise e
+        except (psycopg2.Error, sqlite3.Error) as e:
+            import logging
+            logging.error(f"Database error in search_products: {str(e)}")
+            raise Exception("Product search failed")
+        except Exception as e:
+            import logging
+            logging.error(f"Unexpected error in search_products: {str(e)}")
+            raise Exception("Product search failed")
+        finally:
+            if conn:
+                conn.close()
     
     # INTENTIONAL ISSUE: Inefficient query - missing index consideration
     def get_recent_orders(self, days: int = 30):

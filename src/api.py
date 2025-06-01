@@ -72,56 +72,103 @@ async def startup_event():
 # INTENTIONAL ISSUE: SQL injection vulnerability
 @app.get("/users/{user_id}")
 async def get_user(user_id: str):
-    conn = get_db_connection()
-    # Direct string interpolation - SQL injection risk!
-    query = f"SELECT * FROM users WHERE id = {user_id}"
     try:
-        cursor = conn.execute(query)
+        # Input validation
+        if not user_id.isdigit():
+            raise HTTPException(status_code=400, detail="Invalid user ID format")
+        
+        conn = get_db_connection()
+        # Use parameterized query to prevent SQL injection
+        query = "SELECT * FROM users WHERE id = ?"
+        cursor = conn.execute(query, (user_id,))
         user = cursor.fetchone()
         conn.close()
         
         if user:
             return {"id": user[0], "username": user[1], "email": user[2]}
         else:
-            # INTENTIONAL ISSUE: Information disclosure
-            raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found in database")
+            raise HTTPException(status_code=404, detail="User not found")
+    except HTTPException:
+        raise
+    except sqlite3.Error as e:
+        logging.error(f"Database error in get_user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
     except Exception as e:
-        # INTENTIONAL ISSUE: Exposing internal error details
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        logging.error(f"Unexpected error in get_user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # INTENTIONAL ISSUE: SQL injection in search
 @app.get("/users/search/{query}")
 async def search_users(query: str):
-    conn = get_db_connection()
-    # Another SQL injection vulnerability
-    sql_query = f"SELECT * FROM users WHERE username LIKE '%{query}%' OR email LIKE '%{query}%'"
-    cursor = conn.execute(sql_query)
-    users = cursor.fetchall()
-    conn.close()
-    
-    return [{"id": user[0], "username": user[1], "email": user[2]} for user in users]
+    try:
+        # Input validation
+        if len(query.strip()) < 2:
+            raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
+        
+        conn = get_db_connection()
+        # Use parameterized query to prevent SQL injection
+        sql_query = "SELECT * FROM users WHERE username LIKE ? OR email LIKE ?"
+        search_term = f"%{query}%"
+        cursor = conn.execute(sql_query, (search_term, search_term))
+        users = cursor.fetchall()
+        conn.close()
+        
+        return [{"id": user[0], "username": user[1], "email": user[2]} for user in users]
+    except HTTPException:
+        raise
+    except sqlite3.Error as e:
+        logging.error(f"Database error in search_users: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    except Exception as e:
+        logging.error(f"Unexpected error in search_users: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # INTENTIONAL ISSUE: Weak password hashing and no validation
 @app.post("/users/", response_model=UserResponse)
 async def create_user(user: User):
-    conn = get_db_connection()
-    
-    # INTENTIONAL ISSUE: MD5 hashing (weak and deprecated)
-    hashed_password = hashlib.md5(user.password.encode()).hexdigest()
-    
     try:
-        # INTENTIONAL ISSUE: No input validation, potential SQL injection
+        # Input validation
+        if len(user.username.strip()) < 3:
+            raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+        if len(user.password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        if "@" not in user.email or len(user.email.strip()) < 5:
+            raise HTTPException(status_code=400, detail="Invalid email format")
+        
+        conn = get_db_connection()
+        
+        # Check if username or email already exists
+        check_query = "SELECT id FROM users WHERE username = ? OR email = ?"
+        cursor = conn.execute(check_query, (user.username, user.email))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Username or email already exists")
+        
+        # Use bcrypt for password hashing (better than MD5)
+        import bcrypt
+        hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+        
+        # Use parameterized query to prevent SQL injection
         cursor = conn.execute(
-            f"INSERT INTO users (username, email, password) VALUES ('{user.username}', '{user.email}', '{hashed_password}')"
+            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+            (user.username, user.email, hashed_password)
         )
         user_id = cursor.lastrowid
         conn.commit()
         conn.close()
         
         return UserResponse(id=user_id, username=user.username, email=user.email)
+    except HTTPException:
+        raise
+    except sqlite3.IntegrityError as e:
+        logging.error(f"Integrity error in create_user: {str(e)}")
+        raise HTTPException(status_code=400, detail="User creation failed due to data constraints")
+    except sqlite3.Error as e:
+        logging.error(f"Database error in create_user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
     except Exception as e:
-        # INTENTIONAL ISSUE: Detailed error message
-        raise HTTPException(status_code=400, detail=f"Failed to create user: {str(e)}")
+        logging.error(f"Unexpected error in create_user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # INTENTIONAL ISSUE: No authentication required for sensitive operations
 @app.delete("/users/{user_id}")
@@ -158,14 +205,45 @@ async def get_all_users():
 # INTENTIONAL ISSUE: Unsafe file operations
 @app.post("/upload/")
 async def upload_file(filename: str, content: str):
-    # No path validation - directory traversal vulnerability
-    file_path = f"uploads/{filename}"
-    
-    # INTENTIONAL ISSUE: No file type validation, no size limits
-    with open(file_path, 'w') as f:
-        f.write(content)
-    
-    return {"message": f"File {filename} uploaded successfully"}
+    try:
+        # Input validation
+        if not filename or len(filename.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Filename cannot be empty")
+        
+        # Sanitize filename to prevent directory traversal
+        import os.path
+        import re
+        safe_filename = re.sub(r'[^\w\-_\.]', '', filename)
+        if not safe_filename or '..' in filename or '/' in filename or '\\' in filename:
+            raise HTTPException(status_code=400, detail="Invalid filename")
+        
+        # Validate file size (limit to 1MB)
+        if len(content) > 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File size too large (max 1MB)")
+        
+        # Validate file extension
+        allowed_extensions = {'.txt', '.csv', '.json', '.md'}
+        file_ext = os.path.splitext(safe_filename)[1].lower()
+        if file_ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail="File type not allowed")
+        
+        file_path = f"uploads/{safe_filename}"
+        
+        # Ensure uploads directory exists
+        os.makedirs("uploads", exist_ok=True)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        return {"message": f"File {safe_filename} uploaded successfully"}
+    except HTTPException:
+        raise
+    except OSError as e:
+        logging.error(f"File system error in upload_file: {str(e)}")
+        raise HTTPException(status_code=500, detail="File upload failed")
+    except Exception as e:
+        logging.error(f"Unexpected error in upload_file: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # INTENTIONAL ISSUE: Information disclosure in debug endpoint
 @app.get("/debug/")
