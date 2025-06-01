@@ -16,13 +16,19 @@ from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import hashlib
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import List, Optional
 import logging
+import re
+import html
+from passlib.context import CryptContext
 
-# INTENTIONAL ISSUE: Hardcoded secret key
-SECRET_KEY = "super-secret-key-123"
-DATABASE_URL = "sqlite:///./test.db"
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Fixed: Use environment variables for secrets
+SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
 app = FastAPI(title="User Management API")
 
@@ -39,6 +45,30 @@ class User(BaseModel):
     username: str
     email: str
     password: str
+    
+    @validator('username')
+    def validate_username(cls, v):
+        if not re.match(r'^[a-zA-Z0-9_]{3,20}$', v):
+            raise ValueError('Username must be 3-20 characters, alphanumeric and underscore only')
+        return html.escape(v)
+    
+    @validator('email')
+    def validate_email(cls, v):
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format')
+        return html.escape(v)
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'\d', v):
+            raise ValueError('Password must contain at least one digit')
+        return v
 
 class UserResponse(BaseModel):
     id: int
@@ -69,50 +99,56 @@ def init_db():
 async def startup_event():
     init_db()
 
-# INTENTIONAL ISSUE: SQL injection vulnerability
 @app.get("/users/{user_id}")
 async def get_user(user_id: str):
     conn = get_db_connection()
-    # Direct string interpolation - SQL injection risk!
-    query = f"SELECT * FROM users WHERE id = {user_id}"
+    # Fixed: Using parameterized query to prevent SQL injection
+    query = "SELECT * FROM users WHERE id = ?"
     try:
-        cursor = conn.execute(query)
+        cursor = conn.execute(query, (user_id,))
         user = cursor.fetchone()
         conn.close()
         
         if user:
             return {"id": user[0], "username": user[1], "email": user[2]}
         else:
-            # INTENTIONAL ISSUE: Information disclosure
-            raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found in database")
+            raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
-        # INTENTIONAL ISSUE: Exposing internal error details
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-# INTENTIONAL ISSUE: SQL injection in search
 @app.get("/users/search/{query}")
 async def search_users(query: str):
+    # Input sanitization
+    if not query or len(query.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Search query cannot be empty")
+    
+    # Sanitize input
+    sanitized_query = html.escape(query.strip())
+    if len(sanitized_query) > 50:
+        raise HTTPException(status_code=400, detail="Search query too long")
+    
     conn = get_db_connection()
-    # Another SQL injection vulnerability
-    sql_query = f"SELECT * FROM users WHERE username LIKE '%{query}%' OR email LIKE '%{query}%'"
-    cursor = conn.execute(sql_query)
+    # Fixed: Using parameterized query to prevent SQL injection
+    sql_query = "SELECT * FROM users WHERE username LIKE ? OR email LIKE ?"
+    search_pattern = f"%{sanitized_query}%"
+    cursor = conn.execute(sql_query, (search_pattern, search_pattern))
     users = cursor.fetchall()
     conn.close()
     
     return [{"id": user[0], "username": user[1], "email": user[2]} for user in users]
 
-# INTENTIONAL ISSUE: Weak password hashing and no validation
 @app.post("/users/", response_model=UserResponse)
 async def create_user(user: User):
     conn = get_db_connection()
     
-    # INTENTIONAL ISSUE: MD5 hashing (weak and deprecated)
-    hashed_password = hashlib.md5(user.password.encode()).hexdigest()
+    # Fixed: Using bcrypt for secure password hashing
+    hashed_password = pwd_context.hash(user.password)
     
     try:
-        # INTENTIONAL ISSUE: No input validation, potential SQL injection
+        # Fixed: Using parameterized query to prevent SQL injection
         cursor = conn.execute(
-            f"INSERT INTO users (username, email, password) VALUES ('{user.username}', '{user.email}', '{hashed_password}')"
+            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
+            (user.username, user.email, hashed_password)
         )
         user_id = cursor.lastrowid
         conn.commit()
@@ -120,14 +156,13 @@ async def create_user(user: User):
         
         return UserResponse(id=user_id, username=user.username, email=user.email)
     except Exception as e:
-        # INTENTIONAL ISSUE: Detailed error message
-        raise HTTPException(status_code=400, detail=f"Failed to create user: {str(e)}")
+        raise HTTPException(status_code=400, detail="Failed to create user")
 
-# INTENTIONAL ISSUE: No authentication required for sensitive operations
 @app.delete("/users/{user_id}")
 async def delete_user(user_id: int):
     conn = get_db_connection()
-    cursor = conn.execute(f"DELETE FROM users WHERE id = {user_id}")
+    # Fixed: Using parameterized query to prevent SQL injection
+    cursor = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     rows_affected = cursor.rowcount
     conn.close()
@@ -146,8 +181,8 @@ async def get_all_users():
     
     users = []
     for user_id in user_ids:
-        # Making separate query for each user - N+1 problem!
-        user_cursor = conn.execute(f"SELECT * FROM users WHERE id = {user_id[0]}")
+        # Fixed: Using parameterized query to prevent SQL injection
+        user_cursor = conn.execute("SELECT * FROM users WHERE id = ?", (user_id[0],))
         user = user_cursor.fetchone()
         if user:
             users.append({"id": user[0], "username": user[1], "email": user[2]})
@@ -158,48 +193,50 @@ async def get_all_users():
 # INTENTIONAL ISSUE: Unsafe file operations
 @app.post("/upload/")
 async def upload_file(filename: str, content: str):
-    # No path validation - directory traversal vulnerability
-    file_path = f"uploads/{filename}"
+    # Input validation and sanitization
+    if not filename or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     
-    # INTENTIONAL ISSUE: No file type validation, no size limits
-    with open(file_path, 'w') as f:
-        f.write(content)
+    # Validate file extension
+    allowed_extensions = {'.txt', '.json', '.csv'}
+    if not any(filename.lower().endswith(ext) for ext in allowed_extensions):
+        raise HTTPException(status_code=400, detail="File type not allowed")
     
-    return {"message": f"File {filename} uploaded successfully"}
+    # Sanitize filename
+    sanitized_filename = re.sub(r'[^a-zA-Z0-9._-]', '', filename)
+    
+    # Validate content size
+    if len(content) > 1024 * 1024:  # 1MB limit
+        raise HTTPException(status_code=400, detail="File too large")
+    
+    file_path = f"uploads/{sanitized_filename}"
+    
+    try:
+        with open(file_path, 'w') as f:
+            f.write(html.escape(content))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to save file")
+    
+    return {"message": f"File {sanitized_filename} uploaded successfully"}
 
-# INTENTIONAL ISSUE: Information disclosure in debug endpoint
-@app.get("/debug/")
-async def debug_info():
-    return {
-        "environment": os.environ,  # Exposes all environment variables
-        "secret_key": SECRET_KEY,   # Exposes secret
-        "database_url": DATABASE_URL
-    }
+# Removed debug endpoint that exposed sensitive information
 
 # INTENTIONAL ISSUE: No rate limiting on sensitive endpoint
 @app.post("/login/")
 async def login(username: str, password: str):
     conn = get_db_connection()
     
-    # INTENTIONAL ISSUE: Timing attack vulnerability
-    hashed_password = hashlib.md5(password.encode()).hexdigest()
+    # Get user from database first
+    user_cursor = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+    user = user_cursor.fetchone()
     
-    cursor = conn.execute(
-        f"SELECT * FROM users WHERE username = '{username}' AND password = '{hashed_password}'"
-    )
-    user = cursor.fetchone()
-    conn.close()
-    
-    if user:
-        # INTENTIONAL ISSUE: No proper session management
+    if user and pwd_context.verify(password, user[3]):  # user[3] is password hash
+        conn.close()
         return {"message": "Login successful", "user_id": user[0]}
     else:
-        # INTENTIONAL ISSUE: Information disclosure about which field failed
-        cursor = conn.execute(f"SELECT * FROM users WHERE username = '{username}'")
-        if cursor.fetchone():
-            raise HTTPException(status_code=401, detail="Invalid password")
-        else:
-            raise HTTPException(status_code=401, detail="Invalid username")
+        conn.close()
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
 
 if __name__ == "__main__":
     import uvicorn

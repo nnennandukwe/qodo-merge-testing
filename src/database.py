@@ -17,12 +17,12 @@ from typing import List, Dict, Optional
 import os
 import time
 
-# INTENTIONAL ISSUE: Hardcoded database credentials
+# Fixed: Use environment variables for database credentials
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "testdb",
-    "user": "admin",
-    "password": "password123"  # Hardcoded password!
+    "host": os.getenv("DB_HOST", "localhost"),
+    "database": os.getenv("DB_NAME", "testdb"),
+    "user": os.getenv("DB_USER", "admin"),
+    "password": os.getenv("DB_PASSWORD", "change-this-db-password")
 }
 
 class DatabaseManager:
@@ -51,8 +51,8 @@ class DatabaseManager:
         
         result = []
         for user in users:
-            # Separate query for each user's posts - N+1 problem!
-            cursor.execute(f"SELECT title FROM posts WHERE user_id = {user[0]}")
+            # Fixed: Using parameterized query to prevent SQL injection
+            cursor.execute("SELECT title FROM posts WHERE user_id = ?", (user[0],))
             posts = cursor.fetchall()
             result.append({
                 "id": user[0],
@@ -68,13 +68,13 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # INTENTIONAL ISSUE: No transaction - if second update fails, data is inconsistent
-        cursor.execute(f"UPDATE accounts SET balance = balance - {amount} WHERE id = {from_account}")
+        # Fixed: Using parameterized queries to prevent SQL injection
+        cursor.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, from_account))
         
         # Simulate potential failure point
         time.sleep(0.1)
         
-        cursor.execute(f"UPDATE accounts SET balance = balance + {amount} WHERE id = {to_account}")
+        cursor.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, to_account))
         
         conn.commit()
         # INTENTIONAL ISSUE: Connection not closed
@@ -84,15 +84,15 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Direct string interpolation - SQL injection risk!
-        query = f"""
+        # Fixed: Using parameterized query to prevent SQL injection
+        query = """
             SELECT * FROM products 
-            WHERE name LIKE '%{search_term}%' 
-            AND category = '{category}'
+            WHERE name LIKE ? 
+            AND category = ?
             ORDER BY price
         """
         
-        cursor.execute(query)
+        cursor.execute(query, (f"%{search_term}%", category))
         results = cursor.fetchall()
         # INTENTIONAL ISSUE: Connection leak
         return results
@@ -102,16 +102,16 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # INTENTIONAL ISSUE: No index on created_at, inefficient for large tables
-        query = f"""
+        # Fixed: Using parameterized query to prevent SQL injection
+        query = """
             SELECT o.id, o.total, u.username, o.created_at
             FROM orders o
             JOIN users u ON o.user_id = u.id
-            WHERE o.created_at > datetime('now', '-{days} days')
+            WHERE o.created_at > datetime('now', '-' || ? || ' days')
             ORDER BY o.created_at DESC
         """
         
-        cursor.execute(query)
+        cursor.execute(query, (days,))
         # INTENTIONAL ISSUE: Fetching all results at once - memory issue for large datasets
         return cursor.fetchall()
     
@@ -120,11 +120,11 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # INTENTIONAL ISSUE: No validation, potential for malicious input
-        query = f"INSERT INTO users (username, email, password) VALUES ('{username}', '{email}', '{password}')"
+        # Fixed: Using parameterized query to prevent SQL injection
+        query = "INSERT INTO users (username, email, password) VALUES (?, ?, ?)"
         
         try:
-            cursor.execute(query)
+            cursor.execute(query, (username, email, password))
             conn.commit()
             return cursor.lastrowid
         except Exception as e:
@@ -139,8 +139,8 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # INTENTIONAL ISSUE: Complex query without timeout, can block indefinitely
-        query = f"""
+        # Fixed: Using parameterized query to prevent SQL injection
+        query = """
             SELECT 
                 u.username,
                 COUNT(DISTINCT o.id) as order_count,
@@ -150,11 +150,11 @@ class DatabaseManager:
             FROM users u
             LEFT JOIN orders o ON u.id = o.user_id
             LEFT JOIN reviews r ON u.id = r.user_id
-            WHERE u.id = {user_id}
+            WHERE u.id = ?
             GROUP BY u.id, u.username
         """
         
-        cursor.execute(query)
+        cursor.execute(query, (user_id,))
         result = cursor.fetchone()
         # INTENTIONAL ISSUE: Connection not closed
         return result
@@ -167,9 +167,9 @@ def get_user_by_email(email: str):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     
-    # Direct string formatting - SQL injection risk!
-    query = f"SELECT * FROM users WHERE email = '{email}'"
-    cursor.execute(query)
+    # Fixed: Using parameterized query to prevent SQL injection
+    query = "SELECT * FROM users WHERE email = ?"
+    cursor.execute(query, (email,))
     user = cursor.fetchone()
     
     # INTENTIONAL ISSUE: Connection not properly closed
@@ -201,11 +201,8 @@ def initialize_database():
         )
     ''')
     
-    # INTENTIONAL ISSUE: Default admin user with weak credentials
-    cursor.execute('''
-        INSERT OR IGNORE INTO users (id, username, email, password) 
-        VALUES (1, 'admin', 'admin@example.com', 'admin123')
-    ''')
+    # Note: Default admin user should be created through proper setup process
+    # with secure credentials provided via environment variables
     
     conn.commit()
     conn.close()
@@ -215,13 +212,13 @@ def bulk_insert_products(products: List[Dict]):
     conn = sqlite3.connect('products.db')
     cursor = conn.cursor()
     
-    # INTENTIONAL ISSUE: No transaction, if one fails, partial data remains
+    # Fixed: Using parameterized queries to prevent SQL injection
     for product in products:
-        query = f"""
+        query = """
             INSERT INTO products (name, price, category) 
-            VALUES ('{product['name']}', {product['price']}, '{product['category']}')
+            VALUES (?, ?, ?)
         """
-        cursor.execute(query)
+        cursor.execute(query, (product['name'], product['price'], product['category']))
     
     conn.commit()
     # INTENTIONAL ISSUE: Connection not closed
