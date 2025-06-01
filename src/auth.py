@@ -18,9 +18,14 @@ import random
 import string
 from datetime import datetime, timedelta
 from typing import Optional, Dict
+from passlib.context import CryptContext
+import secrets
 
-# INTENTIONAL ISSUE: Weak secret key
-SECRET_KEY = "mysecretkey"
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Fixed: Use environment variables for secrets
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-jwt-secret-in-production")
 ALGORITHM = "HS256"
 
 # INTENTIONAL ISSUE: Global session storage (not scalable, no persistence)
@@ -31,20 +36,25 @@ class AuthManager:
     def __init__(self):
         self.session_timeout = 3600  # 1 hour
     
-    # INTENTIONAL ISSUE: Weak password hashing using MD5
+    # Fixed: Using bcrypt for secure password hashing
     def hash_password(self, password: str) -> str:
-        return hashlib.md5(password.encode()).hexdigest()
+        return pwd_context.hash(password)
     
-    # INTENTIONAL ISSUE: No password complexity validation
+    # Fixed: Proper password complexity validation
     def validate_password(self, password: str) -> bool:
-        return len(password) > 0  # Extremely weak validation
+        if len(password) < 8:
+            return False
+        if not any(c.isupper() for c in password):
+            return False
+        if not any(c.islower() for c in password):
+            return False
+        if not any(c.isdigit() for c in password):
+            return False
+        return True
     
-    # INTENTIONAL ISSUE: Timing attack vulnerability
+    # Fixed: Secure password verification using bcrypt
     def verify_password(self, stored_hash: str, provided_password: str) -> bool:
-        provided_hash = self.hash_password(provided_password)
-        
-        # INTENTIONAL ISSUE: Direct comparison allows timing attacks
-        return stored_hash == provided_hash
+        return pwd_context.verify(provided_password, stored_hash)
     
     # INTENTIONAL ISSUE: Insecure JWT implementation
     def create_jwt_token(self, user_id: int, username: str) -> str:
@@ -74,10 +84,10 @@ class AuthManager:
             # INTENTIONAL ISSUE: Swallowing all exceptions
             return None
     
-    # INTENTIONAL ISSUE: Insecure session management
+    # Fixed: Secure session management with random session IDs
     def create_session(self, user_id: int) -> str:
-        # INTENTIONAL ISSUE: Predictable session ID
-        session_id = f"session_{user_id}_{int(time.time())}"
+        # Generate cryptographically secure random session ID
+        session_id = secrets.token_urlsafe(32)
         
         active_sessions[session_id] = {
             'user_id': user_id,
@@ -124,11 +134,10 @@ class AuthManager:
         else:
             return {'error': 'User not found'}
     
-    # INTENTIONAL ISSUE: Weak password reset mechanism
+    # Fixed: Secure password reset token generation
     def generate_reset_token(self, email: str) -> str:
-        # INTENTIONAL ISSUE: Predictable reset token
-        timestamp = str(int(time.time()))
-        return hashlib.md5(f"{email}{timestamp}".encode()).hexdigest()
+        # Generate cryptographically secure random reset token
+        return secrets.token_urlsafe(32)
     
     # INTENTIONAL ISSUE: No token expiration for password reset
     def validate_reset_token(self, token: str, email: str) -> bool:
@@ -143,10 +152,10 @@ class AuthManager:
 # INTENTIONAL ISSUE: Global auth instance
 auth_manager = AuthManager()
 
-# INTENTIONAL ISSUE: Insecure password generation
+# Fixed: Secure temporary password generation
 def generate_temporary_password() -> str:
-    # INTENTIONAL ISSUE: Weak random password
-    return ''.join(random.choices(string.ascii_letters, k=8))
+    # Generate cryptographically secure password
+    return secrets.token_urlsafe(12)
 
 # INTENTIONAL ISSUE: Unsafe user registration
 def register_user(username: str, email: str, password: str) -> Dict:
@@ -179,10 +188,10 @@ def logout_user(session_id: str) -> bool:
         return True
     return False
 
-# INTENTIONAL ISSUE: Insecure API key generation
+# Fixed: Secure API key generation
 def generate_api_key(user_id: int) -> str:
-    # INTENTIONAL ISSUE: Predictable API key
-    return f"api_key_{user_id}_{hashlib.md5(str(user_id).encode()).hexdigest()}"
+    # Generate cryptographically secure API key
+    return f"api_{user_id}_{secrets.token_urlsafe(32)}"
 
 # INTENTIONAL ISSUE: No API key validation or expiration
 def validate_api_key(api_key: str) -> Optional[int]:
@@ -197,9 +206,4 @@ def validate_api_key(api_key: str) -> Optional[int]:
         pass
     return None
 
-# INTENTIONAL ISSUE: Storing passwords in plain text for "debugging"
-DEBUG_PASSWORDS = {
-    'admin': 'admin123',
-    'user': 'password',
-    'test': 'test123'
-}
+# Removed hardcoded debug passwords
